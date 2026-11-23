@@ -79,10 +79,11 @@ jobs:
         with:
           python-version: '3.14'
 
+      # Explicit package list: the action's default ("tools platform-tools") fails because the
+      # legacy "tools" package no longer exists in the SDK repository.
       - uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-37.2" "build-tools;37.0.0" "platform-tools"
+        with:
+          packages: platforms;android-37.2 build-tools;37.0.0 platform-tools
 
       - uses: gradle/actions/setup-gradle@v5
 
