@@ -1,0 +1,31 @@
+# --- secrets (see docs/BUILD.md -> Signing)
+.env
+*.jks
+*.keystore
+keystore/
+
+# --- Gradle / Android
+.gradle/
+build/
+/app/build/
+local.properties
+.kotlin/
+captures/
+*.apk
+*.aab
+!/dist/.gitkeep
+.idea/
+*.iml
+.cxx/
+
+# --- Python
+__pycache__/
+*.pyc
+.venv/
+
+# --- extra secret patterns
+.env.*
+!.env.example
+*.p12
+*.pem
+signing.properties

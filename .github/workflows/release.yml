@@ -1,0 +1,126 @@
+name: Release APK
+
+# Builds the signed release APK and publishes it as a GitHub Release (tag v<versionName>).
+# - push to main: runs only when versionName in app/build.gradle.kts changed in that push.
+# - workflow_dispatch: manual run (used for the first release); builds the current version.
+# In both cases it is skipped if a release for that version already exists.
+
+on:
+  push:
+    branches: [main]
+    paths: [app/build.gradle.kts]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      code: ${{ steps.v.outputs.code }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          get_version() { grep -oP '^\s*versionName\s*=\s*"\K[^"]+' ; }
+          version=$(get_version < app/build.gradle.kts)
+          code=$(grep -oP '^\s*versionCode\s*=\s*\K[0-9]+' app/build.gradle.kts)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Current versionName: $version (versionCode $code)"
+
+          release=true
+          if [ "$EVENT" = "push" ]; then
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+               || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              echo "No previous commit to compare against; use a manual run."; release=false
+            else
+              previous=$(git show "$BEFORE:app/build.gradle.kts" 2>/dev/null | get_version || true)
+              echo "Previous versionName: $previous"
+              [ "$previous" = "$version" ] && { echo "Version unchanged, skipping."; release=false; }
+            fi
+          fi
+
+          if [ "$release" = true ] && gh release view "v$version" >/dev/null 2>&1; then
+            echo "Release v$version already exists, skipping."; release=false
+          fi
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+
+  build-release:
+    needs: check-version
+    if: needs.check-version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.check-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Chaquopy needs the same Python minor version on the build machine (python3.14).
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-37.2" "build-tools;37.0.0" "platform-tools"
+
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Restore signing keystore
+        env:
+          CALC_KEYSTORE_BASE64: ${{ secrets.CALC_KEYSTORE_BASE64 }}
+        run: |
+          [ -n "$CALC_KEYSTORE_BASE64" ] || { echo "::error::CALC_KEYSTORE_BASE64 secret is missing"; exit 1; }
+          mkdir -p keystore
+          echo "$CALC_KEYSTORE_BASE64" | base64 -d > keystore/calculator-release.jks
+
+      - name: Build release APK
+        env:
+          CALC_KEYSTORE_PATH: keystore/calculator-release.jks
+          CALC_KEYSTORE_PASSWORD: ${{ secrets.CALC_KEYSTORE_PASSWORD }}
+          CALC_KEY_ALIAS: ${{ secrets.CALC_KEY_ALIAS }}
+          CALC_KEY_PASSWORD: ${{ secrets.CALC_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --no-configuration-cache assembleRelease
+
+      - name: Verify signature
+        run: |
+          apk=app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "$apk"
+          cp "$apk" "Calculator-$VERSION.apk"
+
+      - name: Remove keystore
+        if: always()
+        run: rm -rf keystore
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODE: ${{ needs.check-version.outputs.code }}
+        run: |
+          gh release create "v$VERSION" "Calculator-$VERSION.apk" \
+            --target "$GITHUB_SHA" \
+            --title "Calculator $VERSION" \
+            --notes "Release $VERSION (versionCode $CODE)." \
+            --generate-notes

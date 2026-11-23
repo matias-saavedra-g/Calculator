@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+: back up / transfer ONLY the history (not the extracted Python runtime). -->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="file" path="history.json" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="file" path="history.json" />
+    </device-transfer>
+</data-extraction-rules>
